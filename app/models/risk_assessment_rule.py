@@ -10,7 +10,7 @@ class RiskLevel(enum.Enum):
     HIGH = "HIGH"
 
 class RiskAssessmentRule(Base):
-    __tablename__ = "risk_assessment_rules"
+    __tablename__ = "Risk_Assessment_Rules"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     survey_type_id = Column(String(36))  # Changed from survey_category_id

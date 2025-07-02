@@ -12,7 +12,7 @@ class CompletionStatus(enum.Enum):
     COMPLETED = "COMPLETED"
 
 class CourseEnrollment(Base):
-    __tablename__ = "course_enrollments"
+    __tablename__ = "Course_Enrollment"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(36), ForeignKey("users.id"), index=True)

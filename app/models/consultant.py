@@ -8,11 +8,11 @@ import uuid
 
 Base = declarative_base()
 class Consultant(Base):
-    __tablename__ = "consultants"
+    __tablename__ = "Consultants"  # ← Sửa thành "Consultants" với C hoa
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), ForeignKey("users.id"), unique=True)
-    qualifications = Column(JSON)  # Stores degrees, certifications as JSON array
+    user_id = Column(String(36), ForeignKey("Users.id"), unique=True)
+    # qualifications = Column(JSON)  # Stores degrees, certifications as JSON array
     experience_years = Column(Integer)
     specialization = Column(String(255))
     bio = Column(Text, nullable=True)

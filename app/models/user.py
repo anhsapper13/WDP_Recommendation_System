@@ -18,7 +18,7 @@ class UserRole(enum.Enum):
 
 # Models
 class User(Base):
-    __tablename__ = "users"
+    __tablename__ = "Users"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     email = Column(String(255), unique=True, nullable=False)

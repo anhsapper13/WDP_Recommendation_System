@@ -21,11 +21,11 @@ class BookingStatus(enum.Enum):
 
 
 class Appointment(Base):
-    __tablename__ = "appointments"
+    __tablename__ = "Appointments"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), ForeignKey("users.id"))
-    consultant_id = Column(String(36), ForeignKey("users.id"))
+    user_id = Column(String(36), ForeignKey("Users.id"))
+    consultant_id = Column(String(36), ForeignKey("Users.id"))
     booking_time = Column(DateTime)
     end_time = Column(DateTime)
     appointment_type = Column(Enum(AppointmentType), default=AppointmentType.IN_PERSON)

@@ -20,7 +20,7 @@ class CourseContentType(enum.Enum):
 Base = declarative_base()
 
 class Course(Base):
-    __tablename__ = "courses"
+    __tablename__ = "Course"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     status = Column(Enum(CourseStatus), default=CourseStatus.WAITING_APPROVE)
@@ -38,3 +38,4 @@ class Course(Base):
     # Relationships
     enrollments = relationship("CourseEnrollment", back_populates="course")
     reviews = relationship("CourseReview", back_populates="course")
+    category = relationship("CourseCategory", back_populates="courses")

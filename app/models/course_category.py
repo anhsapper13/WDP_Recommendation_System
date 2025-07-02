@@ -6,16 +6,14 @@ import uuid
 
 Base = declarative_base()
 
-class CourseReview(Base):
-    __tablename__ = "course_reviews"
+class CourseCategory(Base):
+    __tablename__ = "Course_Category"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    course_id = Column(String(36), ForeignKey("courses.id"), index=True)
-    user_id = Column(String(36), ForeignKey("users.id"), index=True)
-    rating = Column(Integer, default=1)
-    review_text = Column(String(255), nullable=True)
+    name = Column(String(255), nullable=False)
+    description = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
-    course = relationship("Course", back_populates="reviews")
-    user = relationship("User", back_populates="courseReviews")
+    course = relationship("Course", back_populates="category")
+

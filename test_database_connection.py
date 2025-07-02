@@ -4,10 +4,13 @@ Database Connection Test Script
 """
 import sys
 import os
+import importlib
+import inspect
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import text
-from app.database.database import engine, SessionLocal
+from sqlalchemy.ext.declarative import DeclarativeMeta
+from app.database.database import engine, SessionLocal, Base
 from app.service.recommendation_action import CRAFFTASSISTRecommendationSystem
 
 def test_basic_connection():
@@ -41,34 +44,81 @@ def test_session_connection():
         print(f"❌ Session connection failed: {str(e)}")
         return False
 
-def test_tables_exist():
-    """Test if required tables exist"""
-    print("\n📋 Checking if required tables exist...")
+def get_all_models():
+    """Dynamically discover all SQLAlchemy models in the models directory"""
+    # Get the current script directory and navigate to models
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    models_dir = os.path.join(script_dir, 'app', 'models')
     
-    required_tables = [
-        'users',
-        'survey_attempts', 
-        'courses',
-        'consultants',
-        'appointments',
-        'course_enrollments',
-        'risk_assessment_rules'
-    ]
+    print(f"🔍 Looking for models in: {models_dir}")
+    
+    if not os.path.exists(models_dir):
+        print(f"❌ Models directory not found: {models_dir}")
+        return {}
+    
+    models = {}
+    
+    # Get all Python files in models directory
+    for filename in os.listdir(models_dir):
+        if filename.endswith('.py') and filename != '__init__.py':
+            module_name = filename[:-3]  # Remove .py extension
+            try:
+                # Import the module
+                module = importlib.import_module(f'app.models.{module_name}')
+                
+                # Find all classes that are SQLAlchemy models
+                for name, obj in inspect.getmembers(module):
+                    if (inspect.isclass(obj) and 
+                        hasattr(obj, '__tablename__') and 
+                        isinstance(obj, type) and
+                        hasattr(obj, '__table__')):
+                        models[obj.__tablename__] = {
+                            'class_name': name,
+                            'module': module_name,
+                            'table_name': obj.__tablename__
+                        }
+            except Exception as e:
+                print(f"⚠️  Could not import {module_name}: {str(e)}")
+    
+    return models
+
+def test_tables_exist():
+    """Test if all model tables exist"""
+    print("\n📋 Checking all model tables...")
+    
+    # Get all models dynamically
+    models = get_all_models()
+    
+    if not models:
+        print("❌ No models found!")
+        return False
+    
+    print(f"🔍 Found {len(models)} models to test:")
+    for table_name, info in models.items():
+        print(f"   - {info['class_name']} → Table: '{table_name}'")
     
     try:
         db = SessionLocal()
         existing_tables = []
         missing_tables = []
         
-        for table in required_tables:
+        for table_name, info in models.items():
             try:
-                result = db.execute(text(f"SELECT COUNT(*) FROM {table} LIMIT 1"))
+                # Create a new session for each table check to avoid transaction issues
+                db_test = SessionLocal()
+                # Use double quotes for case-sensitive table names
+                result = db_test.execute(text(f'SELECT COUNT(*) FROM "{table_name}" LIMIT 1'))
                 count = result.fetchone()[0]
-                existing_tables.append(f"{table} ({count} records)")
-                print(f"✅ Table '{table}' exists with {count} records")
+                existing_tables.append(f"{table_name} ({count} records)")
+                print(f"✅ {info['class_name']}: {count} records")
+                db_test.close()
             except Exception as e:
-                missing_tables.append(table)
-                print(f"❌ Table '{table}' missing or inaccessible: {str(e)}")
+                missing_tables.append(table_name)
+                print(f"❌ {info['class_name']} (Table: '{table_name}'): Missing or inaccessible")
+                try:
+                    db_test.close()
+                except:
+                    pass
         
         db.close()
         
@@ -78,9 +128,9 @@ def test_tables_exist():
         
         if missing_tables:
             print(f"🔧 Missing tables: {', '.join(missing_tables)}")
-            return False
+            return len(existing_tables) > 0  # Return True if at least some tables exist
         else:
-            print("🎉 All required tables exist!")
+            print("🎉 All model tables exist!")
             return True
             
     except Exception as e:

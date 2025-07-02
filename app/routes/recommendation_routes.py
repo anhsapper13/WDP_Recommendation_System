@@ -85,7 +85,6 @@ def get_user_recommendations_by_id(
     test_survey_id: str = "",       # query param
     total_score: int = 0,           # query param
     risk_level: str = "",           # query param
-    top_k: int = 10,                # query param
     db: Session = Depends(get_db)
 ):
     """
@@ -97,7 +96,6 @@ def get_user_recommendations_by_id(
             test_survey_id=test_survey_id,
             total_score=total_score,
             risk_level=risk_level,
-            top_k=top_k,
             db=db
         )
         
@@ -313,23 +311,28 @@ def demo_full_recommendation_system(
         
         recommender = CRAFFTASSISTRecommendationSystem(db)
         
+        print(f"🔍 Demoing full recommendation system for user: {user_id}")
         # 1. Lấy user risk info
         risk_info = recommender.get_user_risk_summary(user_id)
+        print(f"User {user_id} risk summary: {risk_info}")
         
         # 2. Content-based recommendations
         content_courses = recommender.content_based_course_recommendations(user_id, 5)
+        print(f"Content-based course recommendations: {len(content_courses)} found")
         
         # 3. Collaborative filtering recommendations  
         collab_courses = recommender.collaborative_filtering_recommendations(user_id, 5)
+        print(f"Collaborative filtering course recommendations: {len(collab_courses)} found")
         
         # 4. Consultant recommendations
         consultants = recommender.content_based_consultant_recommendations(user_id, 3)
-        
+        print(f"Consultant recommendations: {len(consultants)} found")
         # 5. Hybrid recommendations
         hybrid_result = recommender.hybrid_recommendations(user_id, 10)
+        print(f"Hybrid recommendations: {len(hybrid_result.get('courses', []))} courses, {len(hybrid_result.get('consultants', []))} consultants")
         
         return {
-            "demo_title": "🎯 CRAFFT/ASSIST Recommendation System Demo",
+            "demo_title": "CRAFFT/ASSIST Recommendation System Demo",
             "user_info": {
                 "user_id": user_id,
                 "risk_summary": risk_info
@@ -409,7 +412,7 @@ def get_all_user_survey_data(
             detail=f"Error retrieving survey data: {str(e)}"
         )
 
-@router.get("/data/courses")
+@router.get("/data/courses-list")
 def get_all_course(
     db: Session = Depends(get_db)
 ):
@@ -421,6 +424,7 @@ def get_all_course(
         
         recommender = CRAFFTASSISTRecommendationSystem(db)
         survey_df = recommender.get_courses_data()
+        print(f"Retrieved {len(survey_df)} courses from database")
         
         if survey_df.empty:
             return {
@@ -430,7 +434,6 @@ def get_all_course(
             }
         # Chuyển DataFrame thành dict để return JSON
         data = survey_df.to_dict(orient='records')
-        
         
         return {
             "message": "Survey data retrieved successfully",
@@ -444,4 +447,119 @@ def get_all_course(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving survey data: {str(e)}"
+        )
+
+@router.get("/data/user-interactions")
+def get_all_user_interactions(
+    db: Session = Depends(get_db)
+):
+    """
+    Lấy tất cả dữ liệu user interactions (courses + consultants)
+    """
+    try:
+        from app.service.recommendation_action import CRAFFTASSISTRecommendationSystem
+        
+        recommender = CRAFFTASSISTRecommendationSystem(db)
+        interactions_df = recommender.get_user_interactions()
+        
+        if interactions_df.empty:
+            return {
+                "message": "No interaction data found",
+                "data": [],
+                "total_records": 0,
+                "statistics": {
+                    "course_interactions": 0,
+                    "consultant_interactions": 0,
+                    "unique_users": 0
+                }
+            }
+        
+        # Chuyển DataFrame thành dict để return JSON
+        data = interactions_df.to_dict(orient='records')
+        
+        # Tính thống kê
+        stats = {
+            "course_interactions": len(interactions_df[interactions_df['item_type'] == 'course']),
+            "consultant_interactions": len(interactions_df[interactions_df['item_type'] == 'consultant']),
+            "unique_users": interactions_df['user_id'].nunique(),
+            "unique_courses": len(interactions_df[interactions_df['item_type'] == 'course']['item_id'].unique()),
+            "unique_consultants": len(interactions_df[interactions_df['item_type'] == 'consultant']['item_id'].unique()),
+            "avg_rating": float(interactions_df['rating'].mean()),
+            "rating_distribution": interactions_df['rating'].value_counts().to_dict()
+        }
+        
+        return {
+            "message": "User interactions data retrieved successfully",
+            "data": data,
+            "total_records": len(data),
+            "columns": list(interactions_df.columns),
+            "statistics": stats,
+            "data_types": {col: str(dtype) for col, dtype in interactions_df.dtypes.items()}
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving user interactions: {str(e)}"
+        )
+
+@router.get("/data/user-interactions/{user_id}")
+def get_user_interactions_by_id(
+    user_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Lấy interaction history của một user cụ thể
+    """
+    try:
+        from app.service.recommendation_action import CRAFFTASSISTRecommendationSystem
+        
+        recommender = CRAFFTASSISTRecommendationSystem(db)
+        interactions_df = recommender.get_user_interactions()
+        
+        if interactions_df.empty:
+            return {
+                "message": f"No interaction data found for user {user_id}",
+                "user_id": user_id,
+                "data": [],
+                "total_interactions": 0
+            }
+        
+        # Filter cho user cụ thể
+        user_interactions = interactions_df[interactions_df['user_id'] == user_id]
+        
+        if user_interactions.empty:
+            return {
+                "message": f"No interactions found for user {user_id}",
+                "user_id": user_id,
+                "data": [],
+                "total_interactions": 0
+            }
+        
+        data = user_interactions.to_dict(orient='records')
+        
+        # Tính thống kê cho user này
+        user_stats = {
+            "course_interactions": len(user_interactions[user_interactions['item_type'] == 'course']),
+            "consultant_interactions": len(user_interactions[user_interactions['item_type'] == 'consultant']),
+            "unique_courses": len(user_interactions[user_interactions['item_type'] == 'course']['item_id'].unique()),
+            "unique_consultants": len(user_interactions[user_interactions['item_type'] == 'consultant']['item_id'].unique()),
+            "avg_rating": float(user_interactions['rating'].mean()),
+            "latest_interaction": user_interactions['interaction_date'].max().isoformat() if not user_interactions.empty else None,
+            "first_interaction": user_interactions['interaction_date'].min().isoformat() if not user_interactions.empty else None
+        }
+        
+        return {
+            "message": f"Interactions for user {user_id} retrieved successfully",
+            "user_id": user_id,
+            "data": data,
+            "total_interactions": len(data),
+            "user_statistics": user_stats,
+            "columns": list(user_interactions.columns)
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving interactions for user {user_id}: {str(e)}"
         )
