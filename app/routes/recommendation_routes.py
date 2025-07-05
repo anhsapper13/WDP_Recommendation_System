@@ -449,6 +449,44 @@ def get_all_course(
             detail=f"Error retrieving survey data: {str(e)}"
         )
 
+@router.get("/data/consultants-list")
+def get_all_consultants(
+    db: Session = Depends(get_db)
+):
+    """
+    Lấy tất cả dữ liệu consultants từ database
+    """
+    try:
+        from app.service.recommendation_action import CRAFFTASSISTRecommendationSystem
+        
+        recommender = CRAFFTASSISTRecommendationSystem(db)
+        consultants_df = recommender.get_consultants_data()
+        
+        
+        if consultants_df.empty:
+            return {
+                "message": "No consultants data found",
+                "data": [],
+                "total_records": 0
+            }
+        
+        # Chuyển DataFrame thành dict để return JSON
+        data = consultants_df.to_dict(orient='records')
+        
+        return {
+            "message": "Consultants data retrieved successfully",
+            "data": data,
+            "total_records": len(data),
+            "columns": list(consultants_df.columns),
+            "data_types": {col: str(dtype) for col, dtype in consultants_df.dtypes.items()}
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving consultants data: {str(e)}"
+        )
+
 @router.get("/data/user-interactions")
 def get_all_user_interactions(
     db: Session = Depends(get_db)

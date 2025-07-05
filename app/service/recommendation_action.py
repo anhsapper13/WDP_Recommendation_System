@@ -30,21 +30,22 @@ class CRAFFTASSISTRecommendationSystem:
                     sa.completed_at,
                     u.first_name,
                     u.last_name,
-                    u.age
+                    u.age,
+                    ts.category_id
                 FROM "Survey_Attempts" sa
                 JOIN "Users" u ON sa.user_id = u.id
+                JOIN "Test_Survey" ts ON sa.test_survey_id = ts.id
                 WHERE u.is_deleted = false
                 ORDER BY sa.completed_at DESC
             """)).fetchall()
             print(f"Found {len(survey_data)} survey records")
-            
-            
             
             data_list = []
             for row in survey_data:
                 data_list.append({
                     'user_id': str(row.user_id),
                     'test_survey_id': str(row.test_survey_id),
+                    'category_id': str(row.category_id),  # Ensure category_id is string
                     'total_score': row.total_score,
                     'risk_level': row.risk_level,
                     'completed_at': row.completed_at,
@@ -126,6 +127,7 @@ class CRAFFTASSISTRecommendationSystem:
                     c.is_available,
                     u.first_name,
                     u.last_name,
+                    c.user_id,
                     COALESCE(app.total_appointments, 0) as total_appointments
                 FROM "Consultants" c
                 JOIN "Users" u ON c.user_id = u.id
@@ -149,6 +151,7 @@ class CRAFFTASSISTRecommendationSystem:
                 data_list.append({
                     'id': row.id,
                     'specialization': row.specialization,
+                    'consult_id': str(row.user_id),  # Ensure user_id is string
                     # 'qualifications': row.qualifications,
                     'experience_years': row.experience_years,
                     'bio': row.bio,
@@ -436,11 +439,11 @@ class CRAFFTASSISTRecommendationSystem:
                 print(f"📊 Course {idx} ({course['title'][:20]}...): sim={original_score:.3f} → final={base_score:.3f} ({boost_applied})")
             
             course_scores.append({
-                'course_id': course['id'],
-                'title': course['title'],
-                'description': course['description'],
+                'course_id': str(course['id']),
+                'title': str(course['title']),
+                'description': str(course['description']) if pd.notna(course['description']) else '',
                 'score': float(base_score),
-                'enrollment_count': int(course['enrollment_count']) if course['enrollment_count'] else 0,
+                'enrollment_count': int(course['enrollment_count']) if pd.notna(course['enrollment_count']) else 0,
                 'recommendation_type': 'content_based'
             })
         
@@ -482,7 +485,7 @@ class CRAFFTASSISTRecommendationSystem:
                 specializations = consultant['specialization'].lower().split(',')
                 for spec in risk_mapping.get(user_risk, risk_mapping['medium'])['consultant_specialization']:
                     if any(spec in s.strip() for s in specializations):
-                        base_score *= 1.3
+                        base_score *= 1.2
                         break
             
             # Boost score dựa trên experience
@@ -491,12 +494,12 @@ class CRAFFTASSISTRecommendationSystem:
         
 
             consultant_scores.append({
-                'consultant_id': consultant['id'],
-                'name': consultant['full_name'],
-                'specialization': consultant['specialization'],
-                'experience_years': consultant['experience_years'],
+                'consultant_id': str(consultant['id']),
+                'name': str(consultant['full_name']),
+                'specialization': str(consultant['specialization']) if pd.notna(consultant['specialization']) else 'General',
+                'experience_years': int(consultant['experience_years']) if pd.notna(consultant['experience_years']) else 0,
                 'score': float(base_score),
-                'total_appointments': int(consultant['total_appointments']) if consultant['total_appointments'] else 0,
+                'total_appointments': int(consultant['total_appointments']) if pd.notna(consultant['total_appointments']) else 0,
                 'recommendation_type': 'content_based'
             })
         
@@ -554,10 +557,8 @@ class CRAFFTASSISTRecommendationSystem:
             if interactions_df.empty:
                 print("❌ No interactions data found")
                 return []
-            
             # Tạo user-item matrix cho courses
             course_interactions = interactions_df[interactions_df['item_type'] == 'course']
-            
             print(f"📊 INTERACTION MATRIX ANALYSIS:")
             print(f"   Total interactions: {len(interactions_df)}")
             print(f"   Course interactions: {len(course_interactions)}")
@@ -601,32 +602,95 @@ class CRAFFTASSISTRecommendationSystem:
             print(f"   User avg rating: {user_avg_rating:.3f}")
             print(f"   User rated courses: {list(user_row[user_row != 0].index)}")
             
-            # Tính cosine similarity giữa users
-            user_similarity = cosine_similarity(user_item_matrix.values)
+            # 🆕 STRICT SURVEY CATEGORY FILTERING FOR SIMILARITY
+            # Get user's survey category for strict similarity matching (same as consultant logic)
+            user_surveys = self.get_user_survey_data()
+            current_user_survey = user_surveys[user_surveys['user_id'] == user_id]
+            
+            if not current_user_survey.empty:
+                current_user_risk = current_user_survey.iloc[0]['risk_level']
+                current_user_category = current_user_survey.iloc[0]['category_id']
+                print(f"👤 USER SURVEY PROFILE:")
+                print(f"   Risk level: {current_user_risk}")
+                print(f"   Survey category: {current_user_category}")
+                
+                # Find users with same risk level and category (STRICT FILTERING)
+                strict_similar_users = user_surveys[
+                    (user_surveys['risk_level'] == current_user_risk) &
+                    (user_surveys['category_id'] == current_user_category) &
+                    (user_surveys['user_id'] != user_id)
+                ]['user_id'].unique().tolist()
+                
+                print(f"   Users with same risk+category (STRICT): {len(strict_similar_users)}")
+                print(f"   Strict similar users: {strict_similar_users}")
+                
+                # Get intersection of users in both interaction matrix and survey similarity
+                if strict_similar_users:
+                    available_similar_users = [u for u in strict_similar_users if u in user_item_matrix.index]
+                    print(f"   Available similar users in interaction matrix: {len(available_similar_users)}")
+                    print(f"   Available users: {available_similar_users}")
+                    
+                    if not available_similar_users:
+                        print(f"❌ No users with same risk+category found in interaction matrix")
+                        print(f"   Falling back to risk level only...")
+                        
+                        # Fallback to risk level only if no same category users have interactions
+                        risk_only_users = user_surveys[
+                            (user_surveys['risk_level'] == current_user_risk) &
+                            (user_surveys['user_id'] != user_id)
+                        ]['user_id'].unique().tolist()
+                        
+                        available_similar_users = [u for u in risk_only_users if u in user_item_matrix.index]
+                        print(f"   Fallback users (risk level only): {len(available_similar_users)}")
+                        print(f"   Fallback available users: {available_similar_users}")
+                else:
+                    print(f"❌ No users with same risk+category found")
+                    available_similar_users = []
+            else:
+                print(f"❌ No survey data found for user")
+                available_similar_users = []
+            
+            # Tính cosine similarity chỉ với filtered users (strict filtering)
+            if not available_similar_users:
+                print(f"❌ No similar users available for recommendations")
+                return []
+                
+            # Filter user_item_matrix to only include target user and similar users
+            filtered_users = [user_id] + available_similar_users
+            filtered_matrix = user_item_matrix.loc[filtered_users]
+            
+            print(f"📊 FILTERED USER SIMILARITY MATRIX:")
+            print(f"   Original matrix users: {len(user_item_matrix)}")
+            print(f"   Filtered matrix users: {len(filtered_matrix)} (target + {len(available_similar_users)} similar)")
+            print(f"   Filtered users: {filtered_users}")
+            
+            user_similarity = cosine_similarity(filtered_matrix.values)
             user_similarity_df = pd.DataFrame(
                 user_similarity, 
-                index=user_item_matrix.index, 
-                columns=user_item_matrix.index
+                index=filtered_matrix.index, 
+                columns=filtered_matrix.index
             )
            
-            
-            print(f"📊 USER SIMILARITY MATRIX:")
+            print(f"📊 SIMILARITY CALCULATION RESULTS:")
             print(f"   Similarity matrix shape: {user_similarity_df.shape}")
-            
-            print(f"   Similarity matrix shape: {user_similarity_df}")
             
             user_sim_stats = user_similarity_df[user_id].drop(user_id)
             print(f"   Similarity scores - min: {user_sim_stats.min():.3f}, max: {user_sim_stats.max():.3f}, mean: {user_sim_stats.mean():.3f}")
             print(f"   Non-zero similarities: {(user_sim_stats > 0).sum()}/{len(user_sim_stats)}")
             
-            # Tìm users tương tự (loại bỏ chính user đó)
-            similar_users = user_similarity_df[user_id].drop(user_id).sort_values(ascending=False)
-            top_similar_users = similar_users.head(7)  # Top 5 similar users
+            # Tìm users tương tự (đã được filtered by survey profile)
+            similar_users = user_similarity_df[user_id].drop(user_id)
+            similar_users = similar_users.sort_values(ascending=False)
+            top_similar_users = similar_users.head(7)  # Top 7 similar users from filtered list
             
-            print(f"👥 TOP SIMILAR USERS:")
+            print(f"👥 TOP SIMILAR USERS (STRICT RISK+CATEGORY FILTERING):")
             for i, (sim_user, sim_score) in enumerate(top_similar_users.items(), 1):
-                sim_user_interactions = (user_item_matrix.loc[sim_user] != 0).sum()
-                print(f"   {i}. User {sim_user}: similarity={sim_score:.3f}, interactions={sim_user_interactions}")
+                sim_user_interactions = (filtered_matrix.loc[sim_user] != 0).sum()
+                print(f"   {i}. 📋 User {sim_user}: similarity={sim_score:.3f}, interactions={sim_user_interactions} (same risk+category)")
+            
+            if len(top_similar_users) == 0:
+                print(f"❌ No similar users found with sufficient similarity")
+                return []
             
             # Lấy courses mà similar users đã rated cao nhưng current user chưa thử
             user_rated_courses = set(course_interactions[course_interactions['user_id'] == user_id]['item_id'])
@@ -661,20 +725,22 @@ class CRAFFTASSISTRecommendationSystem:
                 
                 for course_id in similar_user_courses:
                     if course_id not in user_rated_courses:
-                        course_info = courses_df[courses_df['id'] == course_id]
+                        print(f"type (course_id): {type(course_id)}")
+                        # Ensure type consistency for comparison
+                        course_info = courses_df[courses_df['id'].astype(str) == str(course_id)]
                         if not course_info.empty:
                             course_info = course_info.iloc[0]
                             
-                            print(f"✅ Recommending course {course_id}: '{course_info['title'][:30]}...' (similarity: {similarity_score:.3f})")
+                            print(f"✅ Recommending course {course_id}: '{course_info['title'][:30]}...' (similarity_score: {similarity_score:.3f})")
                             
                             course_recommendations.append({
-                                'course_id': course_id,
-                                'title': course_info['title'],
-                                'description': course_info['description'],
+                                'course_id': str(course_id),
+                                'title': str(course_info['title']),
+                                'description': str(course_info['description']) if pd.notna(course_info['description']) else '',
                                 'similarity_score': float(similarity_score),
-                                'enrollment_count': int(course_info['enrollment_count']) if course_info['enrollment_count'] else 0,
+                                'enrollment_count': int(course_info['enrollment_count']) if pd.notna(course_info['enrollment_count']) else 0,
                                 'recommendation_type': 'collaborative',
-                                'source_user': similar_user
+                                'source_user': str(similar_user)
                             })
                         else:
                             print(f"         ❌ Course {course_id} not found in courses database")
@@ -683,6 +749,7 @@ class CRAFFTASSISTRecommendationSystem:
             
             print(f"📊 DEDUPLICATION AND RANKING:")
             print(f"   Raw recommendations: {len(course_recommendations)}")
+            print(f"   Raw recommendations 1: {(course_recommendations)}")
             
             # Remove duplicates và sort by predicted rating
             seen_courses = set()
@@ -749,23 +816,37 @@ class CRAFFTASSISTRecommendationSystem:
                 return []
             
             current_user_risk = current_user_data.iloc[0]['risk_level']
+            current_user_category = current_user_data.iloc[0]['category_id']
             print(f"✅ Current user risk level: {current_user_risk}")
+            print(f"✅ Current user survey category: {current_user_category}")
             
-            # Bước 2: Tìm users có cùng risk level
-            users_same_risk = user_surveys[
+            # Bước 2: Tìm users có cùng risk level AND same survey category
+            users_same_risk_and_category = user_surveys[
                 (user_surveys['risk_level'] == current_user_risk) &
+                (user_surveys['category_id'] == current_user_category) &
                 (user_surveys['user_id'] != user_id)
             ]['user_id'].unique().tolist()
             
             print(f"👥 SIMILAR USERS ANALYSIS:")
-            print(f"   Users with same risk level ({current_user_risk}): {len(users_same_risk)}")
-            print(f"   Similar user IDs: {users_same_risk}")
+            print(f"   Users with same risk level ({current_user_risk}) AND category ({current_user_category}): {len(users_same_risk_and_category)}")
+            print(f"   Similar user IDs: {users_same_risk_and_category}")
             
-            # Risk level distribution
+            # If no users with exact match, fallback to same risk level only
+            if len(users_same_risk_and_category) < 1:
+                print(f"⚠️  No users found with same risk level AND category, falling back to risk level only...")
+                users_same_risk_and_category = user_surveys[
+                    (user_surveys['risk_level'] == current_user_risk) &
+                    (user_surveys['user_id'] != user_id)
+                ]['user_id'].unique().tolist()
+                print(f"   Fallback users with same risk level only: {len(users_same_risk_and_category)}")
+            
+            # Risk level and category distribution
             risk_distribution = user_surveys['risk_level'].value_counts()
+            category_distribution = user_surveys['category_id'].value_counts()
             print(f"   Risk level distribution: {dict(risk_distribution)}")
+            print(f"   Category distribution: {dict(category_distribution)}")
             
-            if len(users_same_risk) < 1:  
+            if len(users_same_risk_and_category) < 1:  
                 print("⚠️  Not enough users with same risk level for collaborative filtering")
                 return []
             
@@ -777,7 +858,7 @@ class CRAFFTASSISTRecommendationSystem:
             
             consultant_interactions = interactions_df[
                 (interactions_df['item_type'] == 'consultant') &
-                (interactions_df['user_id'].isin(users_same_risk + [user_id]))
+                (interactions_df['user_id'].isin(users_same_risk_and_category + [user_id]))
             ]
             
             print(f"   Consultant interactions for risk group: {len(consultant_interactions)}")
@@ -817,48 +898,49 @@ class CRAFFTASSISTRecommendationSystem:
             if not current_user_in_matrix:
                 print(f"ℹ️ User {user_id} has no consultant interactions (cold start)")
                 print(f"🎯 Using popularity-based recommendations from similar users...")
+                return []
                 
                 # Popularity-based fallback for cold start
-                popular_consultants = consultant_interactions[
-                    consultant_interactions['rating'] >= 0.4
-                ].groupby('item_id').agg({
-                    'rating': ['count', 'mean'],
-                    'user_id': 'nunique'
-                }).round(3)
+                # popular_consultants = consultant_interactions[
+                #     consultant_interactions['rating'] >= 0.4
+                # ].groupby('item_id').agg({
+                #     'rating': ['count', 'mean'],
+                #     'user_id': 'nunique'
+                # }).round(3)
                 
-                popular_consultants.columns = ['booking_count', 'avg_rating', 'unique_users']
-                popular_consultants = popular_consultants.sort_values(['booking_count', 'avg_rating'], ascending=False)
+                # popular_consultants.columns = ['booking_count', 'avg_rating', 'unique_users']
+                # popular_consultants = popular_consultants.sort_values(['booking_count', 'avg_rating'], ascending=False)
                 
-                print(f"📊 POPULARITY-BASED RECOMMENDATIONS:")
-                print(f"   Top consultants by bookings:\n{popular_consultants.head()}")
+                # print(f"📊 POPULARITY-BASED RECOMMENDATIONS:")
+                # print(f"   Top consultants by bookings:\n{popular_consultants.head()}")
                 
-                # Create recommendations from popular consultants
-                consultants_df = self.get_consultants_data()
-                popular_recommendations = []
+                # # Create recommendations from popular consultants
+                # consultants_df = self.get_consultants_data()
+                # popular_recommendations = []
                 
-                for consultant_id in popular_consultants.index[:top_k]:
-                    consultant_info = consultants_df[consultants_df['id'] == consultant_id]
-                    if not consultant_info.empty:
-                        consultant_info = consultant_info.iloc[0]
-                        popularity_score = popular_consultants.loc[consultant_id, 'booking_count'] * 0.1 + \
-                                         popular_consultants.loc[consultant_id, 'avg_rating'] * 0.9
+                # for consultant_id in popular_consultants.index[:top_k]:
+                #     consultant_info = consultants_df[consultants_df['id'] == consultant_id]
+                #     if not consultant_info.empty:
+                #         consultant_info = consultant_info.iloc[0]
+                #         popularity_score = popular_consultants.loc[consultant_id, 'booking_count'] * 0.1 + \
+                #                          popular_consultants.loc[consultant_id, 'avg_rating'] * 0.9
                         
-                        popular_recommendations.append({
-                            'consultant_id': consultant_id,
-                            'name': consultant_info['full_name'],
-                            'specialization': consultant_info['specialization'],
-                            'experience_years': consultant_info['experience_years'],
-                            'predicted_rating': float(popularity_score),
-                            'popularity_score': float(popularity_score),
-                            'booking_count': int(popular_consultants.loc[consultant_id, 'booking_count']),
-                            'avg_rating': float(popular_consultants.loc[consultant_id, 'avg_rating']),
-                            'total_appointments': int(consultant_info['total_appointments']) if consultant_info['total_appointments'] else 0,
-                            'recommendation_type': 'collaborative_popularity',
-                            'reason': f"Popular among users with {current_user_risk} risk level"
-                        })
+                #         popular_recommendations.append({
+                #             'consultant_id': consultant_id,
+                #             'name': consultant_info['full_name'],
+                #             'specialization': consultant_info['specialization'],
+                #             'experience_years': consultant_info['experience_years'],
+                #             'predicted_rating': float(popularity_score),
+                #             'popularity_score': float(popularity_score),
+                #             'booking_count': int(popular_consultants.loc[consultant_id, 'booking_count']),
+                #             'avg_rating': float(popular_consultants.loc[consultant_id, 'avg_rating']),
+                #             'total_appointments': int(consultant_info['total_appointments']) if consultant_info['total_appointments'] else 0,
+                #             'recommendation_type': 'collaborative_popularity',
+                #             'reason': f"Popular among users with {current_user_risk} risk level"
+                #         })
                 
-                print(f"🏆 POPULARITY-BASED RESULTS: {len(popular_recommendations)} recommendations")
-                return popular_recommendations
+                # print(f"🏆 POPULARITY-BASED RESULTS: {len(popular_recommendations)} recommendations")
+                # return popular_recommendations
             
             # Continue with existing collaborative logic for users with interactions
             user_similarity = cosine_similarity(user_consultant_matrix.values)
@@ -874,7 +956,6 @@ class CRAFFTASSISTRecommendationSystem:
             # Check if user exists in similarity matrix (additional safety check)
             if user_id not in user_similarity_df.columns:
                 print(f"⚠️ User {user_id} not in similarity matrix")
-                # It should be content base consultant
                 return []
             
             # Show user's consultant interaction profile
@@ -907,13 +988,14 @@ class CRAFFTASSISTRecommendationSystem:
                 ]['item_id']
             )
             print(f"📅 USER HISTORY:")
-            print(f"   Already booked consultants: {list(user_booked_consultants)}")
+            print(f"   Already completely booked consultants: {(user_booked_consultants)}")
             
             consultant_recommendations = []
             consultants_df = self.get_consultants_data()
             
+            
             similarity_threshold = 0.1
-            rating_threshold = 0.4
+            rating_threshold = 0.5
             
             print(f"🔍 FILTERING CRITERIA:")
             print(f"   Similarity threshold: {similarity_threshold}")
@@ -935,21 +1017,22 @@ class CRAFFTASSISTRecommendationSystem:
                 for consultant_id in similar_user_consultants:
                     # Chỉ recommend consultants mà current user chưa book
                     if consultant_id not in user_booked_consultants:
-                        consultant_info = consultants_df[consultants_df['id'] == consultant_id]
+                        consultant_info = consultants_df[(consultants_df['consult_id']) == (consultant_id)]
+                        
                         if not consultant_info.empty:
                             consultant_info = consultant_info.iloc[0]
-                            print(f"         ✅ Recommending consultant {consultant_id}: '{consultant_info['full_name']}' (similarity: {similarity_score:.3f})")
+                            print(f"         ✅ Recommending consultant {consultant_id}: '{consultant_info['full_name']}' (similarity_score: {similarity_score:.3f})")
                             
                             consultant_recommendations.append({
-                                'consultant_id': consultant_id,
-                                'name': consultant_info['full_name'],
-                                'specialization': consultant_info['specialization'],
-                                'experience_years': consultant_info['experience_years'],
+                                'consultant_id': str(consultant_id),
+                                'name': str(consultant_info['full_name']),
+                                'specialization': str(consultant_info['specialization']) if consultant_info['specialization'] else 'General',
+                                'experience_years': int(consultant_info['experience_years']) if pd.notna(consultant_info['experience_years']) else 0,
                                 'similarity_score': float(similarity_score),
-                                'total_appointments': int(consultant_info['total_appointments']) if consultant_info['total_appointments'] else 0,
+                                'total_appointments': int(consultant_info['total_appointments']) if pd.notna(consultant_info['total_appointments']) else 0,
                                 'recommendation_type': 'collaborative',
-                                'reason': f"Users with {current_user_risk} risk level also booked this consultant",
-                                'source_user': similar_user
+                                'reason': f"Users with {current_user_risk} risk level and {current_user_category} survey category also booked this consultant",
+                                'source_user': str(similar_user)
                             })
                         else:
                             print(f"         ❌ Consultant {consultant_id} not found in consultants database")
@@ -957,14 +1040,14 @@ class CRAFFTASSISTRecommendationSystem:
                         print(f"         ⏭️  Consultant {consultant_id} already booked by user")
             
             print(f"📊 DEDUPLICATION AND RANKING:")
-            print(f"   Raw recommendations: {len(consultant_recommendations)}")
+            print(f"   Raw recommendations: {(consultant_recommendations)}")
             
             # Bước 9: Remove duplicates và sort by predicted rating
             seen_consultants = set()
             unique_recommendations = []
             for rec in consultant_recommendations:
                 if rec['consultant_id'] not in seen_consultants:
-                    seen_consultants.add(rec['consultant_id'])
+                    seen_consultants.add((rec['consultant_id']))
                     unique_recommendations.append(rec)
                 else:
                     print(f"   🔄 Removing duplicate consultant: {rec['consultant_id']}")
@@ -997,17 +1080,23 @@ class CRAFFTASSISTRecommendationSystem:
                     'latest_risk_level': None,
                     'latest_score': 0,
                     'completed_at': None,
-                    'total_surveys_taken': 0
+                    'total_surveys_taken': 0,
+                    'latest_category_id': None
                 }
             
             # Get the latest survey (first row since data is ordered by completed_at DESC)
             latest_survey = user_data.iloc[0]
             
+            # Log the category of the latest survey
+            category_id = latest_survey['category_id']
+            print(f"🏷️  User {user_id} latest survey category: {category_id}")
+            
             return {
                 'latest_risk_level': latest_survey['risk_level'],
                 'latest_score': int(latest_survey['total_score']) if latest_survey['total_score'] else 0,
                 'completed_at': latest_survey['completed_at'].isoformat() if pd.notna(latest_survey['completed_at']) else None,
-                'total_surveys_taken': len(user_data)
+                'total_surveys_taken': len(user_data),
+                'latest_category_id': str(category_id) if category_id else None
             }
             
         except Exception as e:
@@ -1043,106 +1132,198 @@ class CRAFFTASSISTRecommendationSystem:
             collab_result = self.collaborative_filtering_recommendations(user_id, top_k * 2)
             collab_courses = collab_result.get('courses', [])
             collab_consultants = collab_result.get('consultants', [])
-            print(f"🤝 Collaborative course recommendations: {len(collab_courses)} found")
+            print(f"🤝 Collaborative course recommendations: {len(collab_courses)}")
             print(f"🤝 Collaborative consultant recommendations: {len(collab_consultants)} found")
             # GET CONTENT-BASED AND COLLABORATIVE RECOMMENDATIONS TO
 
             
-            # Combine and deduplicate courses with raw score hybrid scoring (no normalization)
+            # Combine and deduplicate courses with enhanced hybrid scoring
             print(f"🔄 COMBINING COURSE RECOMMENDATIONS:")
             all_courses = content_courses + collab_courses
+            course_ids_seen = {}
+            for i, course in enumerate(all_courses):
+                course_id = course.get('course_id')
+                if course_id in course_ids_seen:
+                    print(f"   🔄 DUPLICATE FOUND:")
+                    print(f"      Course {course_id} appeared before at index {course_ids_seen[course_id]}")
+                    print(f"      Previous: {all_courses[course_ids_seen[course_id]]}")
+                    print(f"      Current: {course}")
+                    print(f"      → Current will be SKIPPED due to deduplication logic")
+                else:
+                    course_ids_seen[course_id] = i
+                    print(f"   ✅ Course {course_id}: {course.get('recommendation_type', 'unknown')} - score: {course.get('score', 0):.3f}, similarity: {course.get('similarity_score', 0):.3f}")
+                
+            print(f"   Total courses from both methods: {(all_courses)}")
             unique_courses = []
             seen_course_ids = set()
             
             # Weights for hybrid scoring (can be tuned)
-            content_weight = 0.6
-            collaborative_weight = 0.4
+            content_weight = 0.5
+            collaborative_weight = 0.5
+            print(f"📊 COURSE APPEARANCE ORDER:")
+            for i, course in enumerate(all_courses):
+                course_id = course.get('course_id')
+                course_type = course.get('recommendation_type', 'unknown')
+                content_score = course.get('score', 0)
+                collab_score = course.get('similarity_score', 0)
+                print(f"   {i:2d}. {course_id} ({course_type}): content={content_score:.3f}, collab={collab_score:.3f}")
             
+            # SMART DEDUPLICATION WITH MERGING - Group all course versions by course_id
+            course_groups = {}
             for course in all_courses:
                 course_id = course.get('course_id')
-                if course_id not in seen_course_ids:
-                    seen_course_ids.add(course_id)
-                    
-                    # Extract raw scores from each recommendation type
-                    content_score = course.get('score', 0) if 'score' in course else 0
-                    collab_score = course.get('predicted_rating', 0) if 'predicted_rating' in course else course.get('similarity_score', 0)
-                    
-                    # Calculate hybrid score using raw scores (no normalization)
-                    hybrid_score = (content_score * content_weight) + (collab_score * collaborative_weight)
-                    
-                    # Apply business rule boosts based on specific attributes
-                    if course.get('enrollment_count', 0) > 100:  # Popular course boost
-                        hybrid_score *= 1.05
-                    if course.get('avg_rating', 0) >= 4.5:  # High-rated course boost  
-                        hybrid_score *= 1.03
-                    
-                    # Determine recommendation source and apply diversity bonus
-                    has_content = 'score' in course
-                    has_collab = 'predicted_rating' in course or 'similarity_score' in course
-                    if has_content and has_collab:
-                        hybrid_score *= 1.1  # 10% boost for items recommended by both methods
-                        source = 'both'
-                    elif has_content:
-                        source = 'content_based'
-                    else:
-                        source = 'collaborative'
-                    
-                    course['hybrid_score'] = hybrid_score
-                    course['recommendation_source'] = source
-                    unique_courses.append(course)
-                    
-                    print(f"   Course {course_id}: content={content_score:.3f}, collab={collab_score:.3f}, hybrid={hybrid_score:.3f} ({source})")
+                if course_id not in course_groups:
+                    course_groups[course_id] = []
+                course_groups[course_id].append(course)
+            
+            print(f"📊 SMART MERGING ANALYSIS:")
+            for course_id, course_versions in course_groups.items():
+                print(f"   Course {course_id}: {len(course_versions)} versions found")
+                for i, version in enumerate(course_versions):
+                    content_score = version.get('score', 0)
+                    collab_score = version.get('similarity_score', 0)
+                    rec_type = version.get('recommendation_type', 'unknown')
+                    print(f"      Version {i+1}: {rec_type} - content={content_score:.3f}, collab={collab_score:.3f}")
+            
+            # Merge all versions of each course
+            for course_id, course_versions in course_groups.items():
+                # Start with the first version as base
+                merged_course = course_versions[0].copy()
+                
+                # Collect all available scores from all versions
+                content_score = 0
+                collab_score = 0
+                has_content = False
+                has_collab = False
+                
+                for version in course_versions:
+                    if 'score' in version and version['score'] > 0:
+                        content_score = max(content_score, version['score'])  # Take the highest content score
+                        has_content = True
+                    if 'similarity_score' in version and version['similarity_score'] > 0:
+                        collab_score = max(collab_score, version['similarity_score'])  # Take the highest collab score
+                        has_collab = True
+                
+                # Calculate hybrid score from merged scores
+                hybrid_score = (content_score * content_weight) + (collab_score * collaborative_weight)
+                
+                # Determine source and apply boost
+                if has_content and has_collab:
+                    # hybrid_score *= 1.1  # 10% boost for items recommended by both methods
+                    source = 'both'
+                    print(f"   ✅ Course {course_id} MERGED: content={content_score:.3f}, collab={collab_score:.3f}, hybrid={hybrid_score:.3f} (BOOSTED - {source})")
+                elif has_content:
+                    source = 'content_based'
+                    print(f"   📚 Course {course_id}: content={content_score:.3f}, hybrid={hybrid_score:.3f} ({source})")
+                else:
+                    source = 'collaborative'
+                    print(f"   🤝 Course {course_id}: collab={collab_score:.3f}, hybrid={hybrid_score:.3f} ({source})")
+                
+                # Update merged course with final scores
+                if has_content:
+                    merged_course['score'] = content_score
+                if has_collab:
+                    merged_course['similarity_score'] = collab_score
+                merged_course['hybrid_score'] = float(hybrid_score)
+                merged_course['recommendation_source'] = str(source)
+                
+                unique_courses.append(merged_course)
             
             # Sort by hybrid score and take top K
             unique_courses.sort(key=lambda x: x.get('hybrid_score', 0), reverse=True)
             final_courses = unique_courses[:top_k]
             
-            # Combine and deduplicate consultants with raw score hybrid scoring (no normalization)
+            # Combine and deduplicate consultants with enhanced hybrid scoring
             print(f"🔄 COMBINING CONSULTANT RECOMMENDATIONS:")
             all_consultants = content_consultants + collab_consultants
-            unique_consultants = []
-            seen_consultant_ids = set()
+            consultant_ids_seen = {}
+            for i, consultant in enumerate(all_consultants):
+                consultant_id = consultant.get('consultant_id')
+                if consultant_id in consultant_ids_seen:
+                    print(f"   🔄 DUPLICATE FOUND:")
+                    print(f"      Consultant {consultant_id} appeared before at index {consultant_ids_seen[consultant_id]}")
+                    print(f"      Previous: {all_consultants[consultant_ids_seen[consultant_id]]}")
+                    print(f"      Current: {consultant}")
+                    print(f"      → Current will be SKIPPED due to deduplication logic")
+                else:
+                    consultant_ids_seen[consultant_id] = i
+                    print(f"   ✅ Consultant {consultant_id}: {consultant.get('recommendation_type', 'unknown')} - score: {consultant.get('score', 0):.3f}, similarity: {consultant.get('similarity_score', 0):.3f}")
+                
+            print(f"   Total consultants from both methods: {len(all_consultants)}")
             
+            print(f"📊 CONSULTANT APPEARANCE ORDER:")
+            for i, consultant in enumerate(all_consultants):
+                consultant_id = consultant.get('consultant_id')
+                consultant_type = consultant.get('recommendation_type', 'unknown')
+                content_score = consultant.get('score', 0)
+                collab_score = consultant.get('similarity_score', 0)
+                print(f"   {i:2d}. {consultant_id} ({consultant_type}): content={content_score:.3f}, collab={collab_score:.3f}")
+            
+            # SMART DEDUPLICATION WITH MERGING - Group all consultant versions by consultant_id
+            consultant_groups = {}
             for consultant in all_consultants:
                 consultant_id = consultant.get('consultant_id')
-                if consultant_id not in seen_consultant_ids:
-                    seen_consultant_ids.add(consultant_id)
-                    
-                    # Extract raw scores from each recommendation type
-                    content_score = consultant.get('score', 0) if 'score' in consultant else 0
-                    collab_score = consultant.get('predicted_rating', 0) if 'predicted_rating' in consultant else consultant.get('similarity_score', 0)
-                    
-                    # Calculate hybrid score using raw scores (no normalization)
-                    hybrid_score = (content_score * content_weight) + (collab_score * collaborative_weight)
-                    
-                    # Apply business rule boosts based on specific attributes
-                    if consultant.get('experience_years', 0) >= 5:  # Experienced consultant boost
-                        hybrid_score *= 1.05
-                    if consultant.get('avg_rating', 0) >= 4.5:  # High-rated consultant boost
-                        hybrid_score *= 1.03
-                    if consultant.get('total_appointments', 0) > 50:  # Popular consultant boost
-                        hybrid_score *= 1.02
-                    
-                    # Determine recommendation source and apply diversity bonus
-                    has_content = 'score' in consultant
-                    has_collab = 'predicted_rating' in consultant or 'similarity_score' in consultant
-                    if has_content and has_collab:
-                        hybrid_score *= 1.1  # 10% boost for items recommended by both methods
-                        source = 'both'
-                    elif has_content:
-                        source = 'content_based'
-                    else:
-                        source = 'collaborative'
-                    
-                    consultant['hybrid_score'] = hybrid_score
-                    consultant['recommendation_source'] = source
-                    unique_consultants.append(consultant)
-                    
-                    print(f"   Consultant {consultant_id}: content={content_score:.3f}, collab={collab_score:.3f}, hybrid={hybrid_score:.3f} ({source})")
+                if consultant_id not in consultant_groups:
+                    consultant_groups[consultant_id] = []
+                consultant_groups[consultant_id].append(consultant)
+            
+            print(f"📊 SMART MERGING ANALYSIS:")
+            for consultant_id, consultant_versions in consultant_groups.items():
+                print(f"   Consultant {consultant_id}: {len(consultant_versions)} versions found")
+                for i, version in enumerate(consultant_versions):
+                    content_score = version.get('score', 0)
+                    collab_score = version.get('similarity_score', 0)
+                    rec_type = version.get('recommendation_type', 'unknown')
+                    print(f"      Version {i+1}: {rec_type} - content={content_score:.3f}, collab={collab_score:.3f}")
+            
+            # Merge all versions of each consultant
+            unique_consultants = []
+            for consultant_id, consultant_versions in consultant_groups.items():
+                # Start with the first version as base
+                merged_consultant = consultant_versions[0].copy()
+                
+                # Collect all available scores from all versions
+                content_score = 0
+                collab_score = 0
+                has_content = False
+                has_collab = False
+                
+                for version in consultant_versions:
+                    if 'score' in version and version['score'] > 0:
+                        content_score = max(content_score, version['score'])  # Take the highest content score
+                        has_content = True
+                    if 'similarity_score' in version and version['similarity_score'] > 0:
+                        collab_score = max(collab_score, version['similarity_score'])  # Take the highest collab score
+                        has_collab = True
+                
+                # Calculate hybrid score from merged scores
+                hybrid_score = (content_score * content_weight) + (collab_score * collaborative_weight)
+                
+                # Determine source and apply boost
+                if has_content and has_collab:
+                    # hybrid_score *= 1.1  # 10% boost for items recommended by both methods
+                    source = 'both'
+                    print(f"   ✅ Consultant {consultant_id} MERGED: content={content_score:.3f}, collab={collab_score:.3f}, hybrid={hybrid_score:.3f} (BOOSTED - {source})")
+                elif has_content:
+                    source = 'content_based'
+                    print(f"   👩‍⚕️ Consultant {consultant_id}: content={content_score:.3f}, hybrid={hybrid_score:.3f} ({source})")
+                else:
+                    source = 'collaborative'
+                    print(f"   🤝 Consultant {consultant_id}: collab={collab_score:.3f}, hybrid={hybrid_score:.3f} ({source})")
+                
+                # Update merged consultant with final scores
+                if has_content:
+                    merged_consultant['score'] = content_score
+                if has_collab:
+                    merged_consultant['similarity_score'] = collab_score
+                merged_consultant['hybrid_score'] = float(hybrid_score)
+                merged_consultant['recommendation_source'] = str(source)
+                
+                unique_consultants.append(merged_consultant)
             
             # Sort by hybrid score and take top K
             unique_consultants.sort(key=lambda x: x.get('hybrid_score', 0), reverse=True)
-            final_consultants = unique_consultants[:min(3, top_k)]
+            final_consultants = unique_consultants[:min(5, top_k)]
             
             # Final results summary
             print(f"🎯 HYBRID RECOMMENDATION RESULTS:")
