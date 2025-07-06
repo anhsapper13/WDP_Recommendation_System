@@ -3,20 +3,34 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 from dotenv import load_dotenv
+load_dotenv(override=True)
 
-load_dotenv()
+# Debug environment loading
+print(f"🔍 DB_USERNAME from env: '{os.getenv('DB_USERNAME')}'")
+print(f"🔍 DB_PASSWORD from env: '{os.getenv('DB_PASSWORD')}...'")
+print(f"🔍 DB_HOST from env: '{os.getenv('DB_HOST')}'")
+print(f"🔍 DB_DATABASE from env: '{os.getenv('DB_DATABASE')}'")
 
-# PostgreSQL connection settings
-POSTGRES_USER = os.getenv("DB_USERNAME", "postgres")
-POSTGRES_PASSWORD = os.getenv("DB_PASSWORD", "12345678")
-POSTGRES_SERVER = os.getenv("DB_HOST", "localhost")
+POSTGRES_USER = os.getenv("DB_USERNAME")  # ✅ Removed wrong default
+POSTGRES_PASSWORD = os.getenv("DB_PASSWORD")
+POSTGRES_SERVER = os.getenv("DB_HOST")
 POSTGRES_PORT = os.getenv("DB_PORT", "5432")
-POSTGRES_DB = os.getenv("DB_DATABASE", "drug_prevention")
+POSTGRES_DB = os.getenv("DB_DATABASE")
 
 # SQLAlchemy connection string
-SQLALCHEMY_DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_SERVER}:{POSTGRES_PORT}/{POSTGRES_DB}"
+SQLALCHEMY_DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_SERVER}:{POSTGRES_PORT}/{POSTGRES_DB}?sslmode=require"
 
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    pool_size=5,
+    max_overflow=10,
+    pool_pre_ping=True,
+    pool_recycle=3600,
+    connect_args={
+        "sslmode": "require",
+        "connect_timeout": 30
+    }
+)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

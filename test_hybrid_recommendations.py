@@ -8,7 +8,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from app.database.database import get_db_session
+from app.database.database import get_db
 from app.service.recommendation_action import CRAFFTASSISTRecommendationSystem
 import json
 
@@ -20,7 +20,7 @@ def test_hybrid_recommendations():
     print("=" * 80)
     
     # Initialize database session
-    db = next(get_db_session())
+    db = next(get_db())
     
     try:
         # Initialize recommendation system
