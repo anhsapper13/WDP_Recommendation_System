@@ -3,7 +3,7 @@ primary_region = "sin"
 
 [http_service]
 auto_start_machines = true
-auto_stop_machines = false     # ← Đổi thành false để không tự stop
+auto_stop_machines = true     # ← Đổi thành false để không tự stop
 force_https = true
 internal_port = 8000           # ← Sửa format (bỏ underscore)
 min_machines_running = 1       # ← Đổi thành 1 để luôn có machine chạy

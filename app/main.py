@@ -23,8 +23,10 @@ app.add_middleware(
 
 # Include routers
 from app.routes.recommendation_routes import router as recommendation_router
+from app.routes.recognize_toxic_chat import router as toxic_chat_router
 
 app.include_router(recommendation_router)
+app.include_router(toxic_chat_router)
 
 @app.get("/")
 def read_root():
