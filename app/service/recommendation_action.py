@@ -2,20 +2,15 @@ import pandas as pd
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.decomposition import TruncatedSVD
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import List, Dict
-from app.models.survey_attempt import SurveyAttempt
-from app.models.course import Course
-from app.models.consultant import Consultant
 
 
 class CRAFFTASSISTRecommendationSystem:
     def __init__(self, db_session: Session):
         self.db = db_session
         self.tfidf_vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
-        self.svd_model = TruncatedSVD(n_components=50, random_state=42)
         
     def get_user_survey_data(self) -> pd.DataFrame:
         """Lấy dữ liệu khảo sát của người dùng qua SQLAlchemy ORM"""
