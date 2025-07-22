@@ -489,7 +489,7 @@ class CRAFFTASSISTRecommendationSystem:
         
 
             consultant_scores.append({
-                'consultant_id': str(consultant['id']),
+                'consultant_id': str(consultant['consult_id']),
                 'name': str(consultant['full_name']),
                 'specialization': str(consultant['specialization']) if pd.notna(consultant['specialization']) else 'General',
                 'experience_years': int(consultant['experience_years']) if pd.notna(consultant['experience_years']) else 0,
